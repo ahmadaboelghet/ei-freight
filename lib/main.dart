@@ -11,6 +11,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'firebase_options.dart';
 
 import 'core/di/injection_container.dart' as di;
@@ -48,7 +49,7 @@ class EiFreightApp extends StatelessWidget {
           secondary: const Color(0xFF1E3A5F), // Brand navy
           surface: Colors.white,
         ),
-        fontFamily: 'Cairo',
+        textTheme: GoogleFonts.cairoTextTheme(),
         inputDecorationTheme: InputDecorationTheme(
           filled: true,
           fillColor: Colors.white,
