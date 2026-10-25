@@ -7,6 +7,7 @@
 import {
   collection,
   doc,
+  getDoc,
   setDoc,
   updateDoc,
   onSnapshot,
@@ -351,12 +352,22 @@ export const INITIAL_PROVIDERS: ProviderProfile[] = [
 // REAL FIRESTORE SEEDING & SYNC LOGIC
 // ─────────────────────────────────────────────────────────────
 
+/**
+ * In-flight guard: prevents concurrent seeding calls within the same module lifecycle.
+ * NOTE: This resets on page reload, which is why we also use sessionStorage below.
+ */
 let isSeeding = false;
+
+/** Session-level key: set after first successful seed to skip on subsequent page loads. */
+const SEED_SESSION_KEY = "ei_freight_seeded_v1";
 
 /**
  * Seeds initial RFQs, Clients, and Providers into Firestore if not present.
+ * ✅ FIX: Uses sessionStorage to avoid 5x getDocs calls on every page refresh.
  */
 export async function seedFirestoreIfEmpty(): Promise<void> {
+  // ✅ Skip if already seeded in this browser session (survives SPA navigation, not full reload)
+  if (sessionStorage.getItem(SEED_SESSION_KEY)) return;
   if (isSeeding) return;
   isSeeding = true;
 
@@ -415,6 +426,9 @@ export async function seedFirestoreIfEmpty(): Promise<void> {
         });
       }
     }
+
+    // ✅ FIX: Mark session as seeded so we skip 5x getDocs calls on next page reload
+    sessionStorage.setItem(SEED_SESSION_KEY, "true");
   } catch (err) {
     console.warn("[EI Freight Firestore] Seeding note (local fallback available):", err);
   } finally {
@@ -529,9 +543,9 @@ export async function dispatchRfq(rfqId: string, providerIds: string[]): Promise
 export async function submitCarrierQuote(rfqId: string, quote: RfqQuote): Promise<void> {
   try {
     const ref = doc(db, "rfqs", rfqId);
-    // Get existing quotes, add new one, and transition to "offer" stage
-    const rfqSnap = await getDocs(collection(db, "rfqs"));
-    const currentRfq = rfqSnap.docs.find((d) => d.id === rfqId)?.data() as RfqRecord | undefined;
+    // ✅ FIX: Use getDoc to fetch single document instead of getDocs (N+1 read eliminated)
+    const rfqSnap = await getDoc(ref);
+    const currentRfq = rfqSnap.exists() ? (rfqSnap.data() as RfqRecord) : undefined;
     const existingQuotes = currentRfq?.quotes || [];
     const updatedQuotes = [...existingQuotes.filter((q) => q.id !== quote.id), quote];
 
@@ -558,8 +572,9 @@ export async function sendOffersToClient(
 ): Promise<void> {
   try {
     const ref = doc(db, "rfqs", rfqId);
-    const rfqSnap = await getDocs(collection(db, "rfqs"));
-    const currentRfq = rfqSnap.docs.find((d) => d.id === rfqId)?.data() as RfqRecord | undefined;
+    // ✅ FIX: Use getDoc to fetch single document instead of getDocs (N+1 read eliminated)
+    const rfqSnap = await getDoc(ref);
+    const currentRfq = rfqSnap.exists() ? (rfqSnap.data() as RfqRecord) : undefined;
     const existingQuotes = currentRfq?.quotes || [];
 
     const updatedQuotes = existingQuotes.map((q) => ({
@@ -587,8 +602,9 @@ export async function sendOffersToClient(
 export async function awardQuote(rfqId: string, quoteId: string): Promise<void> {
   try {
     const ref = doc(db, "rfqs", rfqId);
-    const rfqSnap = await getDocs(collection(db, "rfqs"));
-    const currentRfq = rfqSnap.docs.find((d) => d.id === rfqId)?.data() as RfqRecord | undefined;
+    // ✅ FIX: Use getDoc to fetch single document instead of getDocs (N+1 read eliminated)
+    const rfqSnap = await getDoc(ref);
+    const currentRfq = rfqSnap.exists() ? (rfqSnap.data() as RfqRecord) : undefined;
     const quote = currentRfq?.quotes.find((q) => q.id === quoteId);
 
     await updateDoc(ref, {
@@ -759,8 +775,9 @@ export async function addInternalOffer(
 ): Promise<void> {
   try {
     const ref = doc(db, "rfqs", rfqId);
-    const rfqSnap = await getDocs(collection(db, "rfqs"));
-    const currentRfq = rfqSnap.docs.find((d) => d.id === rfqId)?.data() as RfqRecord | undefined;
+    // ✅ FIX: Use getDoc to fetch single document instead of getDocs (N+1 read eliminated)
+    const rfqSnap = await getDoc(ref);
+    const currentRfq = rfqSnap.exists() ? (rfqSnap.data() as RfqRecord) : undefined;
     const existingQuotes = currentRfq?.quotes || [];
 
     const newInternalQuote: RfqQuote = {

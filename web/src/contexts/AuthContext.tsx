@@ -164,13 +164,16 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const login = useCallback(async (email: string, password: string) => {
     setAuthError(null);
     try {
+      // Sign in — profile will be loaded automatically by onAuthStateChanged observer.
+      // We do NOT call fetchUserProfile here to avoid a double Firestore read.
+      // Instead, we temporarily fetch the profile only to validate account status.
       const cred = await signInWithEmailAndPassword(auth, email, password);
-      // Profile will be loaded by onAuthStateChanged — no need to fetch here
       const profile = await fetchUserProfile(cred.user.uid);
       if (profile?.status === "suspended" || profile?.status === "blocked") {
         await signOut(auth);
         throw new Error(`Your account is ${profile.status}. Contact support.`);
       }
+      // onAuthStateChanged will handle setting the user profile in state
     } catch (err) {
       const msg = parseAuthError(err);
       setAuthError(msg);
