@@ -11,6 +11,7 @@ import { ProtectedRoute } from "./components/layout/ProtectedRoute";
 import { AppLayout } from "./components/layout/AppLayout";
 import { LoginPage } from "./pages/auth/LoginPage";
 import { SignupPage } from "./pages/auth/SignupPage";
+import { LandingPage } from "./pages/landing/LandingPage";
 import { DashboardPage } from "./pages/dashboard/DashboardPage";
 import { NewShipmentPage } from "./pages/shipments/NewShipmentPage";
 
@@ -21,6 +22,8 @@ export default function App() {
         <HashRouter>
           <Routes>
             {/* Public routes */}
+            <Route path="/" element={<LandingPage />} />
+            <Route path="/landing" element={<LandingPage />} />
             <Route path="/login" element={<LoginPage />} />
             <Route path="/signup" element={<SignupPage />} />
 
@@ -45,9 +48,8 @@ export default function App() {
               }
             />
 
-            {/* Default redirect */}
-            <Route path="/" element={<Navigate to="/dashboard" replace />} />
-            <Route path="*" element={<Navigate to="/dashboard" replace />} />
+            {/* Fallback */}
+            <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </HashRouter>
       </AuthProvider>
