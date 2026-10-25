@@ -1,0 +1,39 @@
+# OS and Editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Web (React / Vite)
+web/node_modules/
+web/dist/
+web/.env.local
+web/.env.*.local
+web/npm-debug.log*
+
+# Backend (Firebase)
+backend/functions/node_modules/
+backend/functions/lib/
+backend/*.log
+backend/node_modules/
+backend/.env.local
+
+# Mobile (Flutter)
+mobile/.dart_tool/
+mobile/build/
+mobile/.flutter-plugins
+mobile/.flutter-plugins-dependencies
+mobile/android/.gradle/
+mobile/android/local.properties
+mobile/android/app/debug/
+mobile/android/app/profile/
+mobile/android/app/release/
+mobile/ios/Pods/
+mobile/ios/.symlinks/
+mobile/ios/Flutter/Flutter.framework
+mobile/ios/Flutter/Flutter.podspec
+mobile/ios/Flutter/Generated.xcconfig
+mobile/ios/Flutter/app.flx
+mobile/ios/Flutter/app.zip
+mobile/ios/Flutter/flutter_assets/
