@@ -48,7 +48,7 @@ class EiFreightApp extends StatelessWidget {
           secondary: const Color(0xFF1E3A5F), // Brand navy
           surface: Colors.white,
         ),
-        fontFamily: 'Inter',
+        fontFamily: 'Cairo',
         inputDecorationTheme: InputDecorationTheme(
           filled: true,
           fillColor: Colors.white,

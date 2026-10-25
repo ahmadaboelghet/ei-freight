@@ -794,7 +794,7 @@ export function AdminDashboard() {
             <div className="text-[11px] font-black uppercase tracking-wider text-blue-600">
               {rfq.id}
             </div>
-            <h1 className="text-2xl sm:text-3xl font-serif font-black text-slate-900 mt-0.5">
+            <h1 className="text-2xl sm:text-3xl font-black text-slate-900 mt-0.5">
               {rfq.route}
             </h1>
             <p className="text-xs text-slate-500 mt-1">

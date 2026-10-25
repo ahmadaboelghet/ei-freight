@@ -3,17 +3,22 @@
 @tailwind utilities;
 
 @layer base {
-  html {
+  *, ::before, ::after {
+    font-family: "Cairo", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+
+  html, body, #root {
+    font-family: "Cairo", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
 
-  html[dir="rtl"] {
-    font-family: "Cairo", system-ui, -apple-system, sans-serif;
+  html[dir="rtl"], html[dir="ltr"] {
+    font-family: "Cairo", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   }
 
-  html[dir="ltr"] {
-    font-family: "Inter", system-ui, -apple-system, sans-serif;
+  button, input, select, textarea, optgroup {
+    font-family: inherit;
   }
 }
 
