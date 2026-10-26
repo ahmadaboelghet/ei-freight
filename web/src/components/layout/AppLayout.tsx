@@ -29,6 +29,8 @@ import {
   IconHome,
   IconListLines,
   IconUser,
+  IconFileText,
+  IconShield,
 } from "../ui/Icons";
 import { clsx } from "clsx";
 
@@ -74,10 +76,11 @@ export function AppLayout({ children }: AppLayoutProps) {
 
     if (role === "provider") {
       return [
-        { id: "dashboard", label: t("Opportunity Desk", "لوحة الفرص"), path: "/dashboard", icon: "⌂" },
-        { id: "requests", label: t("Matched RFQs", "الطلبات المطابقة"), path: "/dashboard", icon: "▤" },
-        { id: "quotes", label: t("My Quotations", "عروضي المقدمة"), path: "/dashboard", icon: "◇" },
-        { id: "profile", label: t("Carrier Capabilities", "إمكانيات النقل"), path: "/dashboard", icon: "◉" },
+        { id: "opportunities", label: t("Pricing Opportunities", "فرص التسعير"), path: "/dashboard?tab=opportunities", icon: IconHome },
+        { id: "analytics", label: t("Analytics / Performance", "الإحصائيات / الأداء"), path: "/dashboard?tab=analytics", icon: IconAnalytics },
+        { id: "requests", label: t("Matched RFQs", "الطلبات المطابقة"), path: "/dashboard?tab=requests", icon: IconListLines },
+        { id: "quotes", label: t("Quotations", "عروض الأسعار"), path: "/dashboard?tab=quotes", icon: IconFileText },
+        { id: "capabilities", label: t("Capabilities", "الإمكانات"), path: "/dashboard?tab=capabilities", icon: IconShield },
       ];
     }
 
@@ -153,9 +156,10 @@ export function AppLayout({ children }: AppLayoutProps) {
         {/* Dynamic Role Navigation Links */}
         <nav className="p-3.5 space-y-1.5 flex-1 overflow-y-auto">
           {navItems.map((item) => {
+            const isOpportunityTab = item.id === "opportunities" && (currentTab === "opportunities" || currentTab === "dashboard");
             const active =
               location.pathname === "/dashboard"
-                ? currentTab === item.id
+                ? currentTab === item.id || isOpportunityTab
                 : location.pathname === item.path;
 
             const IconComp = item.icon as any;

@@ -62,6 +62,16 @@ export const DEMO_ACCOUNTS = [
   },
   {
     role: "provider" as const,
+    name: "Tarek Mansour",
+    company: "SilkRoute Forwarding",
+    email: "tarek@silkrouteforwarding.com",
+    password: "Demo123!",
+    badge: "Provider (SilkRoute)",
+    badgeAr: "مزود خدمة (سيلك روت)",
+    color: "bg-teal-100 text-teal-700 border-teal-200",
+  },
+  {
+    role: "provider" as const,
     name: "Ahmed Farouk",
     company: "BlueWave Logistics",
     email: "ahmed@bluewavelogistics.com",
