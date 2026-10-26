@@ -20,6 +20,7 @@ import {
   INITIAL_SEEDED_RFQS,
 } from "../../services/rfqService";
 import { RfqRecord } from "../../types/domain";
+import { ClientRfqDetailWorkspace } from "./client/ClientRfqDetailWorkspace";
 import {
   IconShip,
   IconPlane,
@@ -79,6 +80,25 @@ export function ClientDashboard() {
       ? list
       : INITIAL_SEEDED_RFQS.filter((r) => r.client === "client-atlas" || r.id === "RFQ-1048");
   }, [allRfqs, user]);
+
+  // ── Selected RFQ Detail View ──
+  const selectedRfqId = searchParams.get("rfqId");
+  const selectedRfq = useMemo(() => {
+    if (!selectedRfqId) return null;
+    return allRfqs.find((r) => r.id === selectedRfqId) || null;
+  }, [allRfqs, selectedRfqId]);
+
+  const openRfqDetail = (id: string) => {
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.set("rfqId", id);
+    setSearchParams(nextParams);
+  };
+
+  const closeRfqDetail = () => {
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.delete("rfqId");
+    setSearchParams(nextParams);
+  };
 
   // ── Modals & Interactive State ──
   const [selectedRfqModal, setSelectedRfqModal] = useState<RfqRecord | null>(null);
@@ -154,10 +174,19 @@ export function ClientDashboard() {
         </div>
       )}
 
-      {/* ─────────────────────────────────────────────────────────────
-          TAB 1: الرئيسية (Home / Main)
-      ───────────────────────────────────────────────────────────── */}
-      {activeTab === "dashboard" && (
+      {/* ── Selected RFQ Detail Workspace (Exact Prototype Detail View on فتح ←) ── */}
+      {selectedRfq ? (
+        <ClientRfqDetailWorkspace
+          rfq={selectedRfq}
+          onBack={closeRfqDetail}
+          onAwardQuote={handleAwardQuote}
+        />
+      ) : (
+        <>
+          {/* ─────────────────────────────────────────────────────────────
+              TAB 1: الرئيسية (Home / Main)
+          ───────────────────────────────────────────────────────────── */}
+          {activeTab === "dashboard" && (
         <div className="space-y-6">
           {/* 1. Hero Request Banner (Exact Match: Navy background #0B1F33) */}
           <div className="bg-[#0B1F33] rounded-2xl p-6 sm:p-8 text-white border border-slate-800 shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
@@ -296,10 +325,7 @@ export function ClientDashboard() {
                             {quotesCount} {t("quotes available", "عروض متاحة")}
                           </span>
                           <button
-                            onClick={() => {
-                              setSelectedRfqModal(rfq);
-                              setQuotesModalOpen(true);
-                            }}
+                            onClick={() => openRfqDetail(rfq.id)}
                             className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs shadow-xs transition flex items-center gap-1.5"
                           >
                             <span>{t("View Quotes", "عرض العروض")}</span>
@@ -315,10 +341,7 @@ export function ClientDashboard() {
                             )}
                           </span>
                           <button
-                            onClick={() => {
-                              setSelectedRfqModal(rfq);
-                              setQuotesModalOpen(false);
-                            }}
+                            onClick={() => openRfqDetail(rfq.id)}
                             className="px-4 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-bold text-xs shadow-2xs transition flex items-center gap-1.5"
                           >
                             <span>{t("View Request", "عرض الطلب")}</span>
@@ -446,10 +469,7 @@ export function ClientDashboard() {
                   {/* Action on Left in RTL */}
                   <div className="flex items-center gap-3 shrink-0 order-2 md:order-1">
                     <button
-                      onClick={() => {
-                        setSelectedRfqModal(rfq);
-                        setQuotesModalOpen(isDeclined);
-                      }}
+                      onClick={() => openRfqDetail(rfq.id)}
                       className="px-4 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-bold text-xs shadow-2xs transition flex items-center gap-1.5"
                     >
                       <span>{t("Open", "فتح")}</span>
@@ -720,6 +740,8 @@ export function ClientDashboard() {
           </div>
         </div>
       )}
+    </>
+  )}
 
       {/* ─────────────────────────────────────────────────────────────
           QUOTE COMPARISON & RFQ DETAIL MODAL
