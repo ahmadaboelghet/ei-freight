@@ -26,6 +26,9 @@ import {
   IconGlobe,
   IconLogout,
   IconChevronDown,
+  IconHome,
+  IconListLines,
+  IconUser,
 } from "../ui/Icons";
 import { clsx } from "clsx";
 
@@ -78,11 +81,12 @@ export function AppLayout({ children }: AppLayoutProps) {
       ];
     }
 
-    // Default: Client
+    // Default: Client (Exact 4 tabs matching prototype: الرئيسية، طلباتي، لوحة المعلومات، الحساب)
     return [
-      { id: "dashboard", label: t("Home", "الرئيسية"), path: "/dashboard", icon: "⌂" },
-      { id: "requests", label: t("My Requests", "طلباتي"), path: "/dashboard", icon: "▤" },
-      { id: "new", label: t("New Request", "طلب جديد"), path: "/shipments/new", icon: "➕" },
+      { id: "dashboard", label: t("Home", "الرئيسية"), path: "/dashboard?tab=dashboard", icon: IconHome },
+      { id: "requests", label: t("My Requests", "طلباتي"), path: "/dashboard?tab=requests", icon: IconListLines },
+      { id: "analytics", label: t("Information Dashboard", "لوحة المعلومات"), path: "/dashboard?tab=analytics", icon: IconAnalytics },
+      { id: "account", label: t("Account", "الحساب"), path: "/dashboard?tab=account", icon: IconUser },
     ];
   };
 
@@ -150,7 +154,7 @@ export function AppLayout({ children }: AppLayoutProps) {
         <nav className="p-3.5 space-y-1.5 flex-1 overflow-y-auto">
           {navItems.map((item) => {
             const active =
-              role === "admin" || internalRole === "super_admin"
+              location.pathname === "/dashboard"
                 ? currentTab === item.id
                 : location.pathname === item.path;
 
