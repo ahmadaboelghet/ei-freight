@@ -21,6 +21,7 @@ import {
 } from "../../services/rfqService";
 import { RfqRecord } from "../../types/domain";
 import { ClientRfqDetailWorkspace } from "./client/ClientRfqDetailWorkspace";
+import { CreateShipmentForm } from "../../components/forms/CreateShipmentForm";
 import {
   IconShip,
   IconPlane,
@@ -102,6 +103,7 @@ export function ClientDashboard() {
 
   // ── Modals & Interactive State ──
   const [selectedRfqModal, setSelectedRfqModal] = useState<RfqRecord | null>(null);
+  const [showCreateRfqModal, setShowCreateRfqModal] = useState(false);
   const [quotesModalOpen, setQuotesModalOpen] = useState(false);
   const [awardingQuoteId, setAwardingQuoteId] = useState<string | null>(null);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
@@ -206,8 +208,8 @@ export function ClientDashboard() {
             {/* Action buttons */}
             <div className="flex flex-col items-center gap-2.5 w-full md:w-auto shrink-0">
               <button
-                disabled
-                className="w-full sm:w-auto px-6 py-2.5 rounded-xl text-xs font-bold bg-slate-800/80 text-slate-400 border border-slate-700 cursor-not-allowed text-center transition"
+                onClick={() => setShowCreateRfqModal(true)}
+                className="w-full sm:w-auto px-6 py-2.5 rounded-xl text-xs font-bold bg-blue-600 hover:bg-blue-500 text-white shadow-md text-center transition active:scale-95 cursor-pointer"
               >
                 + {t("Create Quotation Request", "إنشاء طلب عرض سعر")}
               </button>
@@ -418,13 +420,13 @@ export function ClientDashboard() {
               </p>
             </div>
 
-            <Link
-              to="/shipments/new"
-              className="px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs shadow-sm transition flex items-center justify-center gap-2"
+            <button
+              onClick={() => setShowCreateRfqModal(true)}
+              className="px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs shadow-sm transition flex items-center justify-center gap-2 cursor-pointer active:scale-95"
             >
               <span>+</span>
               <span>{t("Create Quotation Request", "إنشاء طلب عرض سعر")}</span>
-            </Link>
+            </button>
           </div>
 
           {/* Search Bar & Transport Filter */}
@@ -887,6 +889,20 @@ export function ClientDashboard() {
                 {t("Close", "إغلاق")}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ─────────────────────────────────────────────────────────────
+          CREATE SHIPMENT / RFQ MODAL (HIGH-END IN-DASHBOARD EXPERIENCE)
+      ───────────────────────────────────────────────────────────── */}
+      {showCreateRfqModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-slate-950/75 backdrop-blur-xs animate-in fade-in duration-200">
+          <div className="bg-white rounded-3xl max-w-5xl w-full border border-slate-200 shadow-2xl max-h-[92vh] overflow-y-auto">
+            <CreateShipmentForm
+              isModal
+              onClose={() => setShowCreateRfqModal(false)}
+            />
           </div>
         </div>
       )}

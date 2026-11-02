@@ -12,6 +12,7 @@ import {
   updateDoc,
   getDocs,
   serverTimestamp,
+  increment,
 } from "firebase/firestore";
 import { db } from "../../config/firebase";
 import {
@@ -20,8 +21,9 @@ import {
   LifecycleStage,
   ShipmentStatus,
   UserStatus,
+  CanonicalShipmentData,
 } from "../../types/domain";
-import { MasterCountry, MasterLocation } from "../masterData";
+import { MasterCountry, MasterLocation, DEFAULT_COUNTRIES, DEFAULT_LOCATIONS } from "../masterData";
 
 // ─────────────────────────────────────────────────────────────
 // MUTATIONS (LIVE FIRESTORE WRITE OPERATIONS)
@@ -414,3 +416,151 @@ export async function resetClientLimit(clientId: string): Promise<void> {
     throw err;
   }
 }
+
+/**
+ * Step: Client submits a new RFQ from the Business Client Request Form.
+ * Persists canonical shipment data along with top-level compatibility fields.
+ */
+export async function createClientRfq(
+  shipment: CanonicalShipmentData,
+  user: {
+    uid?: string;
+    id?: string;
+    name?: string | null;
+    displayName?: string | null;
+    company?: string | null;
+    companyName?: string | null;
+    email?: string | null;
+    phone?: string | null;
+  } | null,
+  copiedFrom?: string | null
+): Promise<string> {
+  try {
+    // Generate new RFQ ID
+    const randomSuffix = Math.random().toString(36).substring(2, 6).toUpperCase();
+    const newId = `REQ-P-${Date.now().toString().slice(-4)}-${randomSuffix}`;
+
+    // Resolve Origin & Destination labels
+    let originLabel = "";
+    let originCode = "";
+    let destinationLabel = "";
+    let destinationCode = "";
+
+    const locMap = new Map<string, MasterLocation>(DEFAULT_LOCATIONS.map((l) => [l.id, l]));
+    const countryMap = new Map<string, MasterCountry>(DEFAULT_COUNTRIES.map((c) => [c.id, c]));
+
+    const mode = shipment.legs && shipment.legs.length > 0 ? shipment.legs[0].mode : "sea";
+    const opType = shipment.common.operationType || "import";
+
+    if (opType === "import") {
+      // Import: origin is origin country/location, destination is Egypt
+      originCode = shipment.common.incotermCountryId || "";
+      const origCountry = countryMap.get(originCode);
+      const origLoc = shipment.common.incotermLocationId ? locMap.get(shipment.common.incotermLocationId) : undefined;
+      originLabel = origLoc ? `${origLoc.nameAr} (${origLoc.nameEn})` : (origCountry ? `${origCountry.nameAr}` : (shipment.common.incotermAddress || "بلد المنشأ"));
+
+      destinationCode = "EG";
+      if (shipment.common.acceptableDestinationLocationIds && shipment.common.acceptableDestinationLocationIds.length > 0) {
+        destinationLabel = shipment.common.acceptableDestinationLocationIds
+          .map((id) => locMap.get(id)?.nameAr || id)
+          .join(" / ");
+      } else {
+        destinationLabel = "جمهورية مصر العربية";
+      }
+    } else {
+      // Export: origin is Egypt, destination is foreign
+      originCode = "EG";
+      if (shipment.common.acceptableDepartureLocationIds && shipment.common.acceptableDepartureLocationIds.length > 0) {
+        originLabel = shipment.common.acceptableDepartureLocationIds
+          .map((id) => locMap.get(id)?.nameAr || id)
+          .join(" / ");
+      } else {
+        originLabel = shipment.common.exportDepartureAddress || "مصر (نقطة التحميل)";
+      }
+
+      destinationCode = shipment.common.destinationCountryId || "";
+      const destCountry = countryMap.get(destinationCode);
+      const destLoc = shipment.common.destinationLocationId ? locMap.get(shipment.common.destinationLocationId) : undefined;
+      destinationLabel = destLoc
+        ? `${destLoc.nameAr} (${destLoc.nameEn})`
+        : (destCountry ? `${destCountry.nameAr}` : (shipment.common.destinationAddress || "بلد الوصول"));
+    }
+
+    // Calculate weight
+    let weightKg = 0;
+    if (shipment.specific.cargoWeight) {
+      weightKg = parseFloat(shipment.specific.cargoWeight) || 0;
+    } else if (shipment.specific.grossWeight) {
+      weightKg = parseFloat(shipment.specific.grossWeight) || 0;
+    } else if (shipment.specific.containers && shipment.specific.containers.length > 0) {
+      weightKg = shipment.specific.containers.reduce((acc, c) => acc + (Number(c.quantity) || 1) * 10000, 0);
+    }
+
+    const weightFormatted = `${weightKg.toLocaleString()} kg`;
+    const route = `${originLabel} ➔ ${destinationLabel}`;
+
+    const clientId = user?.uid || user?.id || "client-atlas";
+    const clientName = user?.name || user?.displayName || "Nour Hassan";
+    const clientCompany = user?.company || user?.companyName || "Atlas Homeware";
+
+    const rfqRecord: RfqRecord = {
+      id: newId,
+      requestId: newId,
+      client: clientId,
+      clientName,
+      clientCompany,
+      mode,
+      shipmentType: shipment.specific.shipmentType || "fcl",
+      containerType: shipment.specific.containers?.[0]?.type || undefined,
+      origin: originLabel,
+      originCode,
+      destination: destinationLabel,
+      destinationCode,
+      route,
+      cargo: shipment.common.cargo || "بضائع عامة",
+      weight: weightFormatted,
+      weightKg,
+      volumeCbm: shipment.specific.cargoVolume ? parseFloat(shipment.specific.cargoVolume) : undefined,
+      ready: shipment.common.ready || undefined,
+      incoterm: shipment.common.incoterm || undefined,
+      stage: "request",
+      status: "admin_review",
+      statusLabelEn: "Admin Review",
+      statusLabelAr: "مراجعة الإدارة",
+      created: "اليوم",
+      createdAt: new Date().toISOString(),
+      dispatchedProviders: [],
+      quotes: [],
+      clientNotes: shipment.common.notes || "",
+      copiedFrom: copiedFrom || null,
+      shipment,
+    };
+
+    const ref = doc(db, "rfqs", newId);
+    await setDoc(ref, {
+      ...rfqRecord,
+      createdAtServer: serverTimestamp(),
+      updatedAtServer: serverTimestamp(),
+    });
+
+    // Attempt to increment client limit counter if exists
+    try {
+      const clientDocRef = doc(db, "clients", clientId);
+      const snap = await getDoc(clientDocRef);
+      if (snap.exists()) {
+        await updateDoc(clientDocRef, {
+          used: increment(1),
+          updatedAt: serverTimestamp(),
+        });
+      }
+    } catch {
+      // Ignore if clients collection is not yet configured for this client
+    }
+
+    return newId;
+  } catch (err) {
+    console.error("[createClientRfq error]", err);
+    throw err;
+  }
+}
+

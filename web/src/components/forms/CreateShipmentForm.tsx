@@ -1,588 +1,672 @@
 /**
  * @file src/components/forms/CreateShipmentForm.tsx
- * @description Bilingual Shipment request form — fully wired to Firebase via the service layer.
- *
- *  Architecture:
- *    • This component is PURELY PRESENTATIONAL.
- *    • All state, validation, and submission logic lives in `useShipmentForm`.
- *    • The component only renders fields and delegates events to the hook.
- *    • Auth check is done in the hook — component stays clean.
+ * @description Master Progressive-Disclosure Quotation Request Form for Business Clients:
+ *              - Step 1: Guided multi-branch RFQ Form with immediate FCL/LCL selection,
+ *                        dynamic Incoterms, live calculations, and dangerous goods MSDS upload.
+ *              - Step 2: Commercial Review Screen with section-by-section Edit capabilities.
+ *              - Modal Mode & Full-Page Mode support.
+ *              - Dirty-Close Confirmation Guard.
+ *              - Clone data from previous shipment template with auto-reset of dates and quantities.
+ *              - Direct Firestore persistence via `createClientRfq`.
  */
 
-import React from "react";
+import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { useNavigate } from "react-router-dom";
 import { useAuth } from "../../contexts/AuthContext";
 import { useLanguage } from "../../contexts/LanguageContext";
-import { useShipmentForm } from "../../hooks/useShipmentForm";
-import { FormField, inputCls, selectCls } from "../ui/FormField";
-import { ShipmentMode } from "../../types/domain";
+import {
+  CanonicalShipmentData,
+  CanonicalShipmentCommon,
+  CanonicalShipmentSpecific,
+  CanonicalPaymentTerms,
+  CanonicalAttachment,
+  CanonicalMsds,
+  RfqRecord,
+} from "../../types/domain";
+import {
+  DEFAULT_COUNTRIES,
+  DEFAULT_LOCATIONS,
+  MasterCountry,
+  MasterLocation,
+  subscribeToRfqs,
+  INITIAL_SEEDED_RFQS,
+  createClientRfq,
+} from "../../services/rfqService";
+import {
+  validateRfqBranches,
+  validateCargoDetails,
+  validateFinancialTerms,
+} from "./rfq/rfqLogic";
+import { RfqContextSummary } from "./rfq/RfqContextSummary";
+import { RfqOperationSection } from "./rfq/RfqOperationSection";
+import { RfqModeSection } from "./rfq/RfqModeSection";
+import { RfqRouteDestinationSection } from "./rfq/RfqRouteDestinationSection";
+import { RfqIncotermSection } from "./rfq/RfqIncotermSection";
+import { RfqCargoModeDetailsSection } from "./rfq/RfqCargoModeDetailsSection";
+import { RfqFinancialAndDocsSection } from "./rfq/RfqFinancialAndDocsSection";
+import { RfqReviewScreen } from "./rfq/RfqReviewScreen";
+import { RfqPreviousShipmentModal } from "./rfq/RfqPreviousShipmentModal";
+import { RfqDirtyCloseDialog } from "./rfq/RfqDirtyCloseDialog";
+import {
+  IconClose,
+  IconArrowLeft,
+  IconArrowRight,
+  IconCheck,
+  IconStar,
+} from "../ui/Icons";
 import { clsx } from "clsx";
 
-// ─────────────────────────────────────────────────────────────
-// CONSTANTS
-// ─────────────────────────────────────────────────────────────
-
-const INCOTERMS = ["EXW","FCA","CPT","CIP","DAP","DPU","DDP","FAS","FOB","CFR","CIF"];
-const CONTAINER_TYPES = ["20GP", "40GP", "40HC", "45HC", "20RF", "40RF"];
-
-// ─────────────────────────────────────────────────────────────
-// SUB-COMPONENTS
-// ─────────────────────────────────────────────────────────────
-
-/** Section heading with subtle divider */
-function Section({
-  title,
-  subtitle,
-  children,
-}: {
-  title: string;
-  subtitle?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div>
-      <div className="mb-4">
-        <h2 className="text-base font-bold text-slate-800">{title}</h2>
-        {subtitle && <p className="text-xs text-slate-500 mt-0.5">{subtitle}</p>}
-      </div>
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-5 gap-y-4">
-        {children}
-      </div>
-      <hr className="mt-6 border-slate-100" />
-    </div>
-  );
+interface CreateShipmentFormProps {
+  isModal?: boolean;
+  onClose?: () => void;
 }
 
-/** Address group: label, city, governorate, country, street */
-function AddressGroup({
-  prefix,
-  title,
-  subtitle,
-  form,
-  setField,
-  t,
-}: {
-  prefix: "origin" | "dest";
-  title: string;
-  subtitle: string;
-  form: ReturnType<typeof useShipmentForm>["form"];
-  setField: ReturnType<typeof useShipmentForm>["setField"];
-  t: (en: string, ar: string) => string;
-}) {
-  const f = (sub: string) => `${prefix}${sub[0].toUpperCase() + sub.slice(1)}` as keyof typeof form;
-  return (
-    <Section title={title} subtitle={subtitle}>
-      <FormField label={t("Location Label", "اسم أو وصف الموقع")} htmlFor={`${prefix}-label`} required className="sm:col-span-2">
-        <input
-          id={`${prefix}-label`}
-          type="text"
-          placeholder={prefix === "origin" ? t("e.g. Port Said Dry Port", "مثال: ميناء بورسعيد الجاف") : t("e.g. Jebel Ali Port", "مثال: ميناء جبل علي")}
-          value={form[f("label")] as string}
-          onChange={(e) => setField(f("label"), e.target.value)}
-          className={inputCls()}
-        />
-      </FormField>
-      <FormField label={t("City", "المدينة")} htmlFor={`${prefix}-city`} required>
-        <input
-          id={`${prefix}-city`}
-          type="text"
-          placeholder={t("City", "المدينة")}
-          value={form[f("city")] as string}
-          onChange={(e) => setField(f("city"), e.target.value)}
-          className={inputCls()}
-        />
-      </FormField>
-      <FormField label={t("Governorate / Region", "المحافظة / الإقليم")} htmlFor={`${prefix}-gov`} required>
-        <input
-          id={`${prefix}-gov`}
-          type="text"
-          placeholder={t("Governorate or State", "المحافظة أو الولاية")}
-          value={form[f("gov")] as string}
-          onChange={(e) => setField(f("gov"), e.target.value)}
-          className={inputCls()}
-        />
-      </FormField>
-      <FormField label={t("Country Code", "رمز الدولة")} htmlFor={`${prefix}-country`} required hint={t("2-letter ISO code, e.g. EG, AE, SA", "رمز ثنائي، مثل: EG, AE, SA")}>
-        <input
-          id={`${prefix}-country`}
-          type="text"
-          maxLength={2}
-          placeholder="EG"
-          value={form[f("country")] as string}
-          onChange={(e) => setField(f("country"), e.target.value.toUpperCase())}
-          className={clsx(inputCls(), "uppercase tracking-widest font-mono")}
-        />
-      </FormField>
-      <FormField label={t("Street Address", "العنوان بالتفصيل")} htmlFor={`${prefix}-street`} hint={t("Optional", "اختياري")}>
-        <input
-          id={`${prefix}-street`}
-          type="text"
-          placeholder={t("Optional street address", "العنوان بالشارع (اختياري)")}
-          value={form[f("street")] as string}
-          onChange={(e) => setField(f("street"), e.target.value)}
-          className={inputCls()}
-        />
-      </FormField>
-    </Section>
-  );
-}
+const INITIAL_COMMON: CanonicalShipmentCommon = {
+  operationType: "import",
+  operatingCountryId: "EG",
+  deliveryType: "arrival",
+  destinationCountryId: "EG",
+  acceptableDestinationLocationIds: ["eg-alx"],
+  incoterm: "FOB",
+  incotermCountryId: "CN",
+  incotermLocationId: "cn-sha",
+  acceptableDepartureLocationIds: ["cn-sha"],
+  cargo: "",
+  ready: "",
+  routingPreference: "direct",
+  notes: "",
+};
 
-// ─────────────────────────────────────────────────────────────
-// MAIN COMPONENT
-// ─────────────────────────────────────────────────────────────
+const INITIAL_SPECIFIC: CanonicalShipmentSpecific = {
+  shipmentType: "fcl",
+  containers: [
+    {
+      containerLineId: "cont-1",
+      type: "40' HC",
+      quantity: 1,
+      dimensions: [{ id: "dim-1", length: "", width: "", height: "", unit: "cm" }],
+    },
+  ],
+  overweightStatus: "no_overweight",
+  cargoWeight: "",
+  cargoVolume: "",
+  dimensions: [{ id: "dim-main", length: "", width: "", height: "", unit: "cm" }],
+  packageType: "pallets",
+  stackable: true,
+  dangerousGoods: "no",
+  refrigeratedCargo: "no",
+  requiredTemperature: "",
+  priority: "medium",
+  fclServicePreference: "both",
+  truckType: "Curtainsider",
+  preferredServiceLevel: "Standard",
+};
 
-export function CreateShipmentForm() {
+const INITIAL_PAYMENT: CanonicalPaymentTerms = {
+  type: "cash",
+  creditDays: null,
+  billOfLadingType: "original_bl",
+};
+
+export function CreateShipmentForm({ isModal, onClose }: CreateShipmentFormProps) {
   const { user } = useAuth();
-  const { t } = useLanguage();
-  const {
-    form,
-    setField,
-    validationErrors,
-    submitError,
-    isSubmitting,
-    handleSubmit,
-  } = useShipmentForm();
+  const { t, isArabic } = useLanguage();
+  const navigate = useNavigate();
 
-  const modes: { value: ShipmentMode; label: string; icon: string }[] = [
-    { value: "sea", label: t("Sea Freight", "شحن بحري"), icon: "🚢" },
-    { value: "air", label: t("Air Freight", "شحن جوي"), icon: "✈️" },
-    { value: "road", label: t("Road Freight", "شحن بري"), icon: "🚛" },
-    { value: "multimodal", label: t("Multimodal", "متعدد الوسائط"), icon: "🔗" },
-  ];
+  // ── Step Navigation (1: Form, 2: Review, 3: Success) ──
+  const [currentStep, setCurrentStep] = useState<1 | 2 | 3>(1);
+  const [createdRfqId, setCreatedRfqId] = useState<string | null>(null);
 
-  const packagingTypes = [
-    { value: "pallets", label: t("Pallets", "بالتات / طبالي") },
-    { value: "boxes", label: t("Boxes", "كراتين / صناديق") },
-    { value: "drums", label: t("Drums", "براميل") },
-    { value: "bags", label: t("Bags", "أكياس / شكائر") },
-    { value: "crates", label: t("Crates", "أقفاص خشبية") },
-    { value: "loose", label: t("Loose", "بضائع صب / سائبة") },
-    { value: "other", label: t("Other", "أخرى") },
-  ];
+  // ── Form State ──
+  const [common, setCommon] = useState<CanonicalShipmentCommon>(INITIAL_COMMON);
+  const [specific, setSpecific] = useState<CanonicalShipmentSpecific>(INITIAL_SPECIFIC);
+  const [activeMode, setActiveMode] = useState<"sea" | "air" | "road" | "multimodal">("sea");
+  const [paymentTerms, setPaymentTerms] = useState<CanonicalPaymentTerms>(INITIAL_PAYMENT);
+  const [attachments, setAttachments] = useState<CanonicalAttachment[]>([]);
+  const [msdsList, setMsdsList] = useState<CanonicalMsds[]>([]);
+  const [copiedFrom, setCopiedFrom] = useState<string | null>(null);
 
-  const truckTypes = [
-    { value: "curtainsider", label: t("Curtainsider", "شاحنة ستائرية") },
-    { value: "flatbed", label: t("Flatbed", "شاحنة مسطحة") },
-    { value: "box_truck", label: t("Box Truck", "شاحنة صندوق مقفل") },
-    { value: "reefer_truck", label: t("Reefer Truck", "شاحنة تبريد وتجميد") },
-    { value: "lowbed", label: t("Lowbed", "لوبد حمولات ثقيلة") },
-    { value: "tanker", label: t("Tanker", "صهريج") },
-  ];
+  // ── UI States ──
+  const [isDirty, setIsDirty] = useState(false);
+  const [showDirtyDialog, setShowDirtyDialog] = useState(false);
+  const [showPreviousModal, setShowPreviousModal] = useState(false);
+  const [validationError, setValidationError] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
-  // ── Guard: unauthenticated ──────────────────────────────
-  if (!user) {
-    return (
-      <div className="flex items-center justify-center min-h-[60vh]">
-        <div className="text-center p-8 bg-amber-50 border border-amber-200 rounded-2xl max-w-sm">
-          <span className="text-4xl">🔒</span>
-          <h2 className="mt-3 text-lg font-bold text-amber-900">{t("Sign In Required", "تسجيل الدخول مطلوب")}</h2>
-          <p className="mt-1 text-sm text-amber-700">
-            {t("You must be signed in to create a shipment request.", "يجب تسجيل الدخول لتقديم طلب عرض أسعار شحن.")}
-          </p>
-        </div>
-      </div>
-    );
-  }
+  // ── Previous RFQs list for cloning ──
+  const [allRfqs, setAllRfqs] = useState<RfqRecord[]>(INITIAL_SEEDED_RFQS);
+  useEffect(() => {
+    const unsub = subscribeToRfqs((list) => setAllRfqs(list));
+    return unsub;
+  }, []);
 
-  // ── Guard: account not approved ─────────────────────────
-  if (user.status !== "approved") {
-    return (
-      <div className="flex items-center justify-center min-h-[60vh]">
-        <div className="text-center p-8 bg-blue-50 border border-blue-200 rounded-2xl max-w-sm">
-          <span className="text-4xl">⏳</span>
-          <h2 className="mt-3 text-lg font-bold text-blue-900">{t("Account Pending Approval", "الحساب قيد المراجعة والاعتماد")}</h2>
-          <p className="mt-1 text-sm text-blue-700">
-            {t(
-              `Your account is currently ${user.status}. Once approved by EI Freight, you'll be able to submit shipment requests.`,
-              `حسابك حالياً في حالة "${user.status}". بمجرد اعتماده من إدارة EI Freight ستتمكن من تقديم طلبات الشحن مباشرة.`
-            )}
-          </p>
-        </div>
-      </div>
-    );
-  }
+  // Section refs for jump-back from Review step
+  const topRef = useRef<HTMLDivElement>(null);
+  const sectionCommonRef = useRef<HTMLDivElement>(null);
+  const sectionCargoRef = useRef<HTMLDivElement>(null);
+  const sectionFinancialRef = useRef<HTMLDivElement>(null);
+
+  // ── Change Handlers ──
+  const handleUpdateCommon = useCallback((updates: Partial<CanonicalShipmentCommon>) => {
+    setCommon((prev) => ({ ...prev, ...updates }));
+    setIsDirty(true);
+    setValidationError(null);
+  }, []);
+
+  const handleUpdateSpecific = useCallback((updates: Partial<CanonicalShipmentSpecific>) => {
+    setSpecific((prev) => ({ ...prev, ...updates }));
+    setIsDirty(true);
+    setValidationError(null);
+  }, []);
+
+  const handleUpdatePaymentTerms = useCallback((updates: Partial<CanonicalPaymentTerms>) => {
+    setPaymentTerms((prev) => ({ ...prev, ...updates }));
+    setIsDirty(true);
+    setValidationError(null);
+  }, []);
+
+  // Mode & Immediate Subtype selection
+  const handleSelectMode = useCallback(
+    (mode: "sea" | "air" | "road" | "multimodal") => {
+      setActiveMode(mode);
+      setIsDirty(true);
+      setValidationError(null);
+
+      if (mode === "sea") {
+        setSpecific((prev) => ({
+          ...prev,
+          shipmentType: prev.shipmentType === "fcl" || prev.shipmentType === "lcl" ? prev.shipmentType : "fcl",
+        }));
+      } else if (mode === "road") {
+        setSpecific((prev) => ({
+          ...prev,
+          shipmentType: prev.shipmentType === "ftl" || prev.shipmentType === "ltl" ? prev.shipmentType : "ftl",
+        }));
+      } else {
+        setSpecific((prev) => ({ ...prev, shipmentType: "" }));
+      }
+    },
+    []
+  );
+
+  const handleSelectSeaSubtype = useCallback((subtype: "fcl" | "lcl") => {
+    setSpecific((prev) => ({ ...prev, shipmentType: subtype }));
+    setIsDirty(true);
+    setValidationError(null);
+  }, []);
+
+  const handleSelectRoadSubtype = useCallback((subtype: "ftl" | "ltl") => {
+    setSpecific((prev) => ({ ...prev, shipmentType: subtype }));
+    setIsDirty(true);
+    setValidationError(null);
+  }, []);
+
+  // Attachments & MSDS
+  const handleAddAttachments = useCallback((files: FileList | null) => {
+    if (!files) return;
+    const newItems: CanonicalAttachment[] = Array.from(files).map((f, i) => ({
+      id: `att-${Date.now()}-${i}`,
+      name: f.name,
+      size: f.size,
+      type: f.type,
+      category: "commercial_invoice",
+      uploadedAt: new Date().toISOString(),
+      visibility: "invited_providers",
+      available: true,
+    }));
+    setAttachments((prev) => [...prev, ...newItems]);
+    setIsDirty(true);
+  }, []);
+
+  const handleRemoveAttachment = useCallback((id: string) => {
+    setAttachments((prev) => prev.filter((a) => a.id !== id));
+    setIsDirty(true);
+  }, []);
+
+  const handleAddMsds = useCallback((files: FileList | null) => {
+    if (!files) return;
+    const newItems: CanonicalMsds[] = Array.from(files).map((f, i) => ({
+      id: `msds-${Date.now()}-${i}`,
+      name: f.name,
+      size: f.size,
+      type: f.type,
+      uploadedAt: new Date().toISOString(),
+      available: true,
+      visibility: "invited_providers",
+    }));
+    setMsdsList((prev) => [...prev, ...newItems]);
+    setIsDirty(true);
+  }, []);
+
+  const handleRemoveMsds = useCallback((id: string) => {
+    setMsdsList((prev) => prev.filter((m) => m.id !== id));
+    setIsDirty(true);
+  }, []);
+
+  // ── Clone from previous shipment template ──
+  const handleApplyClonedShipment = useCallback(
+    (clonedData: Partial<CanonicalShipmentData>, sourceId: string) => {
+      if (clonedData.common) {
+        setCommon((prev) => ({
+          ...prev,
+          ...clonedData.common,
+          ready: "",
+        }));
+      }
+      if (clonedData.specific) {
+        setSpecific((prev) => ({
+          ...prev,
+          ...clonedData.specific,
+        }));
+      }
+      if (clonedData.paymentTerms) {
+        setPaymentTerms(clonedData.paymentTerms);
+      }
+      if (clonedData.legs && clonedData.legs.length > 0) {
+        setActiveMode(clonedData.legs[0].mode);
+      }
+      setAttachments([]);
+      setMsdsList([]);
+      setCopiedFrom(sourceId);
+      setIsDirty(true);
+    },
+    []
+  );
+
+  // ── Step 1 Validation & Proceed to Step 2 ──
+  const handleProceedToReview = () => {
+    setValidationError(null);
+
+    // 1. Cargo description & ready date mandatory
+    if (!common.cargo || !common.cargo.trim()) {
+      setValidationError(
+        t("Cargo description is required.", "يرجى كتابة وصف دقيق للبضاعة.")
+      );
+      topRef.current?.scrollIntoView({ behavior: "smooth" });
+      return;
+    }
+    if (!common.ready || !common.ready.trim()) {
+      setValidationError(
+        t("Ready date is required.", "يرجى تحديد تاريخ جاهزية البضاعة.")
+      );
+      sectionCargoRef.current?.scrollIntoView({ behavior: "smooth" });
+      return;
+    }
+
+    // 2. Dangerous goods requires MSDS
+    if (specific.dangerousGoods === "yes" && msdsList.length === 0) {
+      setValidationError(
+        t(
+          "Material Safety Data Sheet (MSDS) is mandatory for Dangerous Goods.",
+          "مطلوب رفع شهادة سلامة المواد (MSDS) للبضائع الخطرة."
+        )
+      );
+      sectionCargoRef.current?.scrollIntoView({ behavior: "smooth" });
+      return;
+    }
+
+    // 3. Mode & Branch validation
+    const branchErr = validateRfqBranches(common, activeMode);
+    if (branchErr) {
+      setValidationError(branchErr);
+      sectionCommonRef.current?.scrollIntoView({ behavior: "smooth" });
+      return;
+    }
+
+    // 4. Cargo details validation
+    const isSeaFcl = activeMode === "sea" && specific.shipmentType === "fcl";
+    const cargoErr = validateCargoDetails(specific, activeMode, isSeaFcl);
+    if (cargoErr) {
+      setValidationError(cargoErr);
+      sectionCargoRef.current?.scrollIntoView({ behavior: "smooth" });
+      return;
+    }
+
+    // 5. Financial terms validation
+    const finErr = validateFinancialTerms(paymentTerms, activeMode);
+    if (finErr) {
+      setValidationError(finErr);
+      sectionFinancialRef.current?.scrollIntoView({ behavior: "smooth" });
+      return;
+    }
+
+    // All clear -> proceed to review
+    setCurrentStep(2);
+    topRef.current?.scrollIntoView({ behavior: "smooth" });
+  };
+
+  // ── Edit Jump-Back from Step 2 ──
+  const handleEditSection = (sectionIndex: number) => {
+    setCurrentStep(1);
+    setTimeout(() => {
+      if (sectionIndex <= 2) {
+        sectionCommonRef.current?.scrollIntoView({ behavior: "smooth" });
+      } else if (sectionIndex === 3) {
+        sectionCargoRef.current?.scrollIntoView({ behavior: "smooth" });
+      } else {
+        sectionFinancialRef.current?.scrollIntoView({ behavior: "smooth" });
+      }
+    }, 100);
+  };
+
+  // ── Step 2 Final Submit ──
+  const handleFinalSubmit = async () => {
+    setIsSubmitting(true);
+    setSubmitError(null);
+
+    try {
+      const canonical: CanonicalShipmentData = {
+        common,
+        specific,
+        legs: [
+          {
+            mode: activeMode === "multimodal" ? "sea" : (activeMode as "sea" | "air" | "road"),
+            shipmentType: specific.shipmentType,
+            originCountryId: common.operationType === "import" ? (common.incotermCountryId || "") : "EG",
+            originLocationId: common.operationType === "import" ? (common.incotermLocationId || "") : (common.acceptableDepartureLocationIds?.[0] || ""),
+            destinationCountryId: common.operationType === "import" ? "EG" : (common.destinationCountryId || ""),
+            destinationLocationId: common.operationType === "import" ? (common.acceptableDestinationLocationIds?.[0] || "") : (common.destinationLocationId || ""),
+            cargoWeight: specific.cargoWeight || specific.grossWeight,
+            cargoVolume: specific.cargoVolume,
+          },
+        ],
+        paymentTerms,
+        attachments,
+        msds: msdsList,
+      };
+
+      const newId = await createClientRfq(canonical, user, copiedFrom);
+      setCreatedRfqId(newId);
+      setIsDirty(false);
+      setCurrentStep(3); // Success Screen
+    } catch (err) {
+      setSubmitError(
+        (err as Error).message ||
+          t("Failed to submit quotation request. Please try again.", "فشل إرسال طلب عرض السعر. يرجى المحاولة مرة أخرى.")
+      );
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  // ── Dirty-Close Handlers ──
+  const handleRequestClose = () => {
+    if (isDirty && currentStep !== 3) {
+      setShowDirtyDialog(true);
+    } else {
+      if (onClose) onClose();
+      else navigate("/dashboard?tab=requests");
+    }
+  };
+
+  const handleConfirmDiscard = () => {
+    setShowDirtyDialog(false);
+    setIsDirty(false);
+    if (onClose) onClose();
+    else navigate("/dashboard?tab=requests");
+  };
 
   return (
-    <div className="max-w-3xl mx-auto px-4 py-8">
-      {/* ── Page header ── */}
-      <div className="mb-8">
-        <p className="text-xs font-bold uppercase tracking-widest text-blue-600 mb-1">
-          {t("New Request", "طلب جديد")}
-        </p>
-        <h1 className="text-2xl font-bold text-slate-900">
-          {t("Create Shipment Request", "طلب عرض أسعار شحن جديد")}
-        </h1>
-        <p className="mt-1 text-sm text-slate-500">
-          {t(
-            "Fill in the details below. Our team will match you with the best freight providers.",
-            "املأ البيانات أدناه، وسيقوم فريقنا بربط شحنتك بأفضل مزودي خدمات الشحن المعتمدين."
-          )}
-        </p>
-      </div>
-
-      <form onSubmit={handleSubmit} noValidate className="space-y-8 bg-white rounded-2xl border border-slate-200 shadow-sm p-6 sm:p-8">
-
-        {/* ═══════════════════════════════════════════════════
-            SECTION 1 — TRANSPORT MODE
-        ═══════════════════════════════════════════════════ */}
-        <div>
-          <h2 className="text-base font-bold text-slate-800 mb-4">
-            {t("Transport Mode", "وسيلة النقل")}
-          </h2>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            {modes.map(({ value, label, icon }) => (
-              <button
-                key={value}
-                type="button"
-                onClick={() => setField("mode", value)}
-                className={clsx(
-                  "flex flex-col items-center gap-2 p-4 rounded-xl border-2 text-sm font-semibold transition-all",
-                  form.mode === value
-                    ? "border-blue-500 bg-blue-50 text-blue-700 shadow-sm"
-                    : "border-slate-200 bg-white text-slate-600 hover:border-blue-300 hover:bg-blue-50/50"
-                )}
-                aria-pressed={form.mode === value}
-              >
-                <span className="text-2xl">{icon}</span>
-                {label}
-              </button>
-            ))}
+    <div
+      ref={topRef}
+      className={clsx(
+        "relative w-full bg-slate-50 transition-all text-slate-800",
+        isModal ? "p-0" : "max-w-5xl mx-auto py-8 px-4 sm:px-6"
+      )}
+    >
+      {/* ── Top Header Bar ── */}
+      <div className="sticky top-0 z-30 bg-white/95 backdrop-blur-md border-b border-slate-200 px-6 py-4 flex items-center justify-between shadow-xs">
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={handleRequestClose}
+            className="w-8 h-8 rounded-full border border-slate-200 hover:bg-slate-100 flex items-center justify-center text-slate-500 transition"
+            title={t("Close", "إغلاق")}
+          >
+            <IconClose className="w-4 h-4" />
+          </button>
+          <div>
+            <div className="flex items-center gap-2">
+              <h1 className="text-base font-black text-slate-900 tracking-tight">
+                {t("Commercial Quotation Request", "طلب عرض سعر تجاري")}
+              </h1>
+              {copiedFrom && (
+                <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 text-[10px] font-bold">
+                  {t("Cloned from", "مستنسخ من")} {copiedFrom}
+                </span>
+              )}
+            </div>
+            <p className="text-xs text-slate-500">
+              {currentStep === 1
+                ? t("Step 1 of 2: Configure Route & Cargo Details", "المرحلة 1 من 2: تحديد المسار وتفاصيل الشحنة")
+                : currentStep === 2
+                ? t("Step 2 of 2: Review & Send to Operations", "المرحلة 2 من 2: مراجعة الطلب والإرسال للعمليات")
+                : t("Request Created", "تم إنشاء الطلب بنجاح")}
+            </p>
           </div>
-          <hr className="mt-6 border-slate-100" />
         </div>
 
-        {/* ═══════════════════════════════════════════════════
-            SECTION 2 — ORIGIN
-        ═══════════════════════════════════════════════════ */}
-        <AddressGroup
-          prefix="origin"
-          title={t("📍 Pick-up Location", "📍 مكان الاستلام (ميناء / نقطة الشحن)")}
-          subtitle={t("Enter the pick-up location details.", "أدخل بيانات وموقع استلام البضاعة من المصنع أو الميناء.")}
-          form={form}
-          setField={setField}
-          t={t}
-        />
-
-        {/* ═══════════════════════════════════════════════════
-            SECTION 3 — DESTINATION
-        ═══════════════════════════════════════════════════ */}
-        <AddressGroup
-          prefix="dest"
-          title={t("🏁 Delivery Location", "🏁 مكان التسليم (ميناء / نقطة الوصول)")}
-          subtitle={t("Enter the delivery location details.", "أدخل بيانات وموقع تسليم الشحنة للوجهة النهائية.")}
-          form={form}
-          setField={setField}
-          t={t}
-        />
-
-        {/* ═══════════════════════════════════════════════════
-            SECTION 4 — CARGO DETAILS
-        ═══════════════════════════════════════════════════ */}
-        <Section
-          title={t("📦 Cargo Details", "📦 تفاصيل ومواصفات البضاعة")}
-          subtitle={t("Describe the goods being shipped.", "صف نوع وطبيعة البضائع المشحونة.")}
-        >
-          <FormField label={t("Cargo Description", "وصف البضاعة")} htmlFor="cargo-desc" required className="sm:col-span-2">
-            <textarea
-              id="cargo-desc"
-              rows={2}
-              placeholder={t("e.g. Electronic components, industrial machinery parts…", "مثال: معدات كهربائية، قطع غيار صناعية، منسوجات قطنية...")}
-              value={form.cargoDescription}
-              onChange={(e) => setField("cargoDescription", e.target.value)}
-              className={clsx(inputCls(), "resize-none")}
-            />
-          </FormField>
-
-          <FormField label={t("Weight (kg)", "الوزن الإجمالي (كجم)")} htmlFor="weight" required>
-            <input
-              id="weight"
-              type="number"
-              min={0.1}
-              step={0.1}
-              placeholder="e.g. 12500"
-              value={form.weightKg}
-              onChange={(e) => setField("weightKg", e.target.value)}
-              className={inputCls()}
-            />
-          </FormField>
-
-          <FormField label={t("Volume (CBM)", "الحجم بالمتر المكعب (CBM)")} htmlFor="volume" hint={t("Optional", "اختياري")}>
-            <input
-              id="volume"
-              type="number"
-              min={0.1}
-              step={0.1}
-              placeholder="e.g. 48.5"
-              value={form.volumeCbm}
-              onChange={(e) => setField("volumeCbm", e.target.value)}
-              className={inputCls()}
-            />
-          </FormField>
-
-          <FormField label={t("Packaging Type", "نوع التعبئة والتغليف")} htmlFor="packaging">
-            <select
-              id="packaging"
-              value={form.packagingType}
-              onChange={(e) => setField("packagingType", e.target.value)}
-              className={selectCls()}
+        {/* Action Buttons */}
+        <div className="flex items-center gap-3">
+          {currentStep === 1 && (
+            <button
+              type="button"
+              onClick={() => setShowPreviousModal(true)}
+              className="px-3.5 py-1.5 rounded-xl border border-blue-200 bg-blue-50/70 hover:bg-blue-100/70 text-blue-700 text-xs font-bold transition flex items-center gap-1.5 shadow-2xs"
             >
-              <option value="">{t("— Select —", "— اختر النوع —")}</option>
-              {packagingTypes.map((p) => (
-                <option key={p.value} value={p.value}>{p.label}</option>
-              ))}
-            </select>
-          </FormField>
+              <IconStar className="w-3.5 h-3.5 text-blue-600 fill-blue-500" />
+              <span>{t("Use Previous Shipment", "شحنة سابقة")}</span>
+            </button>
+          )}
 
-          <FormField label={t("Quantity (units)", "الكمية / عدد الطرود")} htmlFor="qty" hint={t("Optional", "اختياري")}>
-            <input
-              id="qty"
-              type="number"
-              min={1}
-              step={1}
-              placeholder="e.g. 24"
-              value={form.quantity}
-              onChange={(e) => setField("quantity", e.target.value)}
-              className={inputCls()}
+          {currentStep === 2 && (
+            <button
+              type="button"
+              onClick={() => setCurrentStep(1)}
+              className="px-3.5 py-1.5 rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-100 text-xs font-bold transition flex items-center gap-1"
+            >
+              <span>←</span>
+              <span>{t("Back to Edit", "الرجوع للتعديل")}</span>
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* ── STEP 1: FORM CONFIGURATION ── */}
+      {currentStep === 1 && (
+        <div className="p-6 space-y-8 max-w-4xl mx-auto">
+          {/* Reactive Context Summary Bar */}
+          <RfqContextSummary
+            common={common}
+            mode={activeMode}
+            specific={specific}
+            countries={DEFAULT_COUNTRIES}
+          />
+
+          {/* Validation Banner */}
+          {validationError && (
+            <div className="p-4 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-semibold flex items-center gap-3 shadow-xs animate-in fade-in">
+              <span className="w-5 h-5 rounded-full bg-rose-600 text-white flex items-center justify-center font-bold shrink-0">
+                !
+              </span>
+              <span>{validationError}</span>
+            </div>
+          )}
+
+          {/* Section 1: Operation Type */}
+          <div ref={sectionCommonRef}>
+            <RfqOperationSection
+              operationType={common.operationType}
+              onSelectOperation={(op) => handleUpdateCommon({ operationType: op })}
+              hasPreviousShipments={allRfqs.length > 0}
+              onOpenPreviousModal={() => setShowPreviousModal(true)}
             />
-          </FormField>
-
-          <FormField label={t("Incoterms", "شروط التجارة الدولية (Incoterms)")} htmlFor="incoterms" hint={t("Optional", "اختياري")}>
-            <select
-              id="incoterms"
-              value={form.incoterms}
-              onChange={(e) => setField("incoterms", e.target.value)}
-              className={selectCls()}
-            >
-              <option value="">{t("— Select Incoterms —", "— اختر شرط التجارة —")}</option>
-              {INCOTERMS.map((i) => (
-                <option key={i} value={i}>{i}</option>
-              ))}
-            </select>
-          </FormField>
-
-          <FormField label={t("Routing Preference", "تفضيل خط السير")} htmlFor="routing">
-            <select
-              id="routing"
-              value={form.routingPreference}
-              onChange={(e) => setField("routingPreference", e.target.value)}
-              className={selectCls()}
-            >
-              <option value="">{t("— Any —", "— أي مسار متاح —")}</option>
-              <option value="direct">{t("Direct", "مباشر")}</option>
-              <option value="transit">{t("Via Transit Port", "ترانزيت عبر ميناء وسيط")}</option>
-            </select>
-          </FormField>
-
-          {/* Toggles */}
-          <div className="sm:col-span-2 flex flex-wrap gap-6">
-            <label className="flex items-center gap-2 cursor-pointer select-none">
-              <input
-                type="checkbox"
-                checked={form.isHazardous}
-                onChange={(e) => setField("isHazardous", e.target.checked)}
-                className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-400"
-              />
-              <span className="text-sm text-slate-700">{t("⚠️ Hazardous Goods", "⚠️ بضائع ومواد خطرة (IMO)")}</span>
-            </label>
-            <label className="flex items-center gap-2 cursor-pointer select-none">
-              <input
-                type="checkbox"
-                checked={form.requiresRefrigeration}
-                onChange={(e) => setField("requiresRefrigeration", e.target.checked)}
-                className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-400"
-              />
-              <span className="text-sm text-slate-700">{t("❄️ Requires Refrigeration", "❄️ تتطلب تبريد أو تجميد")}</span>
-            </label>
           </div>
 
-          {/* Temperature range — conditional */}
-          {form.requiresRefrigeration && (
-            <>
-              <FormField label={t("Min Temperature (°C)", "أدنى درجة حرارة (°م)")} htmlFor="temp-min" required>
-                <input
-                  id="temp-min"
-                  type="number"
-                  step={1}
-                  placeholder="e.g. -18"
-                  value={form.temperatureMin}
-                  onChange={(e) => setField("temperatureMin", e.target.value)}
-                  className={inputCls()}
-                />
-              </FormField>
-              <FormField label={t("Max Temperature (°C)", "أقصى درجة حرارة (°م)")} htmlFor="temp-max" required>
-                <input
-                  id="temp-max"
-                  type="number"
-                  step={1}
-                  placeholder="e.g. 4"
-                  value={form.temperatureMax}
-                  onChange={(e) => setField("temperatureMax", e.target.value)}
-                  className={inputCls()}
-                />
-              </FormField>
-            </>
-          )}
-        </Section>
+          {/* Section 2: Freight Mode & Immediate Subtype */}
+          <RfqModeSection
+            mode={activeMode}
+            onSelectMode={handleSelectMode}
+            seaSubtype={specific.shipmentType as any}
+            onSelectSeaSubtype={handleSelectSeaSubtype}
+            roadSubtype={specific.shipmentType as any}
+            onSelectRoadSubtype={handleSelectRoadSubtype}
+          />
 
-        {/* ═══════════════════════════════════════════════════
-            SECTION 5 — MODE-SPECIFIC DETAILS
-        ═══════════════════════════════════════════════════ */}
-        {form.mode === "sea" && (
-          <Section
-            title={t("🚢 Sea Freight Details", "🚢 تفاصيل الشحن البحري")}
-            subtitle={t("FCL = full container load, LCL = shared container.", "حاوية كاملة (FCL) أو شحنة مجزأة (LCL).")}
-          >
-            <FormField label={t("Shipment Type", "نوع الشحن البحري")} htmlFor="sea-type" required>
-              <select
-                id="sea-type"
-                value={form.seaShipmentType}
-                onChange={(e) => setField("seaShipmentType", e.target.value as "FCL" | "LCL")}
-                className={selectCls()}
-              >
-                <option value="FCL">{t("FCL — Full Container Load", "FCL — حاوية كاملة")}</option>
-                <option value="LCL">{t("LCL — Less than Container Load", "LCL — شحن مجزأ (أقل من حاوية)")}</option>
-              </select>
-            </FormField>
+          {/* Section 3 & 4: Route & Physical Destination */}
+          <RfqRouteDestinationSection
+            common={common}
+            mode={activeMode}
+            countries={DEFAULT_COUNTRIES}
+            locations={DEFAULT_LOCATIONS}
+            onChangeCommon={handleUpdateCommon}
+          />
 
-            {form.seaShipmentType === "FCL" && (
-              <>
-                <FormField label={t("Container Type", "نوع الحاوية")} htmlFor="container-type" hint={t("Optional", "اختياري")}>
-                  <select
-                    id="container-type"
-                    value={form.containerType}
-                    onChange={(e) => setField("containerType", e.target.value)}
-                    className={selectCls()}
-                  >
-                    <option value="">{t("— Select —", "— اختر نوع الحاوية —")}</option>
-                    {CONTAINER_TYPES.map((c) => (
-                      <option key={c} value={c}>{c}</option>
-                    ))}
-                  </select>
-                </FormField>
-                <FormField label={t("Container Count", "عدد الحاويات")} htmlFor="container-count" hint={t("Optional", "اختياري")}>
-                  <input
-                    id="container-count"
-                    type="number"
-                    min={1}
-                    step={1}
-                    placeholder="e.g. 2"
-                    value={form.containerCount}
-                    onChange={(e) => setField("containerCount", e.target.value)}
-                    className={inputCls()}
-                  />
-                </FormField>
-              </>
-            )}
-          </Section>
-        )}
+          {/* Section 5 & 6: Incoterms & Responsibility Points */}
+          <RfqIncotermSection
+            common={common}
+            mode={activeMode}
+            countries={DEFAULT_COUNTRIES}
+            locations={DEFAULT_LOCATIONS}
+            onChangeCommon={handleUpdateCommon}
+          />
 
-        {form.mode === "road" && (
-          <Section title={t("🚛 Road Freight Details", "🚛 تفاصيل الشحن البري")}>
-            <FormField label={t("Shipment Type", "نوع النقل البري")} htmlFor="road-type" required>
-              <select
-                id="road-type"
-                value={form.roadShipmentType}
-                onChange={(e) => setField("roadShipmentType", e.target.value as "FTL" | "LTL")}
-                className={selectCls()}
-              >
-                <option value="FTL">{t("FTL — Full Truck Load", "FTL — شاحنة كاملة")}</option>
-                <option value="LTL">{t("LTL — Less than Truck Load", "LTL — حمولة مجزأة")}</option>
-              </select>
-            </FormField>
-            <FormField label={t("Truck Type", "نوع الشاحنة المفضلة")} htmlFor="truck-type" hint={t("Optional vehicle preference", "اختياري")}>
-              <select
-                id="truck-type"
-                value={form.truckType}
-                onChange={(e) => setField("truckType", e.target.value)}
-                className={selectCls()}
-              >
-                <option value="">{t("— Any —", "— أي نوع متاح —")}</option>
-                {truckTypes.map((tItem) => (
-                  <option key={tItem.value} value={tItem.value}>{tItem.label}</option>
-                ))}
-              </select>
-            </FormField>
-          </Section>
-        )}
+          {/* Section 7: Cargo & Mode-Specific Specifications */}
+          <div ref={sectionCargoRef}>
+            <RfqCargoModeDetailsSection
+              common={common}
+              specific={specific}
+              mode={activeMode}
+              msdsList={msdsList}
+              onChangeCommon={handleUpdateCommon}
+              onChangeSpecific={handleUpdateSpecific}
+              onUpdateMsds={handleAddMsds}
+              onRemoveMsds={handleRemoveMsds}
+            />
+          </div>
 
-        {/* ═══════════════════════════════════════════════════
-            SECTION 6 — NOTES
-        ═══════════════════════════════════════════════════ */}
-        <div>
-          <h2 className="text-base font-bold text-slate-800 mb-4">
-            {t("📝 Additional Notes", "📝 ملاحظات وتفاصيل إضافية")}
-          </h2>
-          <textarea
-            rows={3}
-            placeholder={t(
-              "Any special requirements, preferred carriers, deadline constraints…",
-              "أي متطلبات خاصة، ناقلين مفضلين، تواريخ نهائية حرجة للتسليم..."
-            )}
-            value={form.clientNotes}
-            onChange={(e) => setField("clientNotes", e.target.value)}
-            className={clsx(inputCls(), "resize-none w-full")}
+          {/* Section 8: Financial Terms & Document Uploads */}
+          <div ref={sectionFinancialRef}>
+            <RfqFinancialAndDocsSection
+              paymentTerms={paymentTerms}
+              mode={activeMode}
+              attachments={attachments}
+              onChangePaymentTerms={handleUpdatePaymentTerms}
+              onAddAttachments={handleAddAttachments}
+              onRemoveAttachment={handleRemoveAttachment}
+            />
+          </div>
+
+          {/* Bottom Step 1 Action Bar */}
+          <div className="pt-6 border-t border-slate-200 flex items-center justify-between">
+            <button
+              type="button"
+              onClick={handleRequestClose}
+              className="px-5 py-2.5 rounded-xl border border-slate-300 text-xs font-bold text-slate-600 hover:bg-slate-100 transition"
+            >
+              {t("Cancel Draft", "إلغاء المسودة")}
+            </button>
+
+            <button
+              type="button"
+              onClick={handleProceedToReview}
+              className="px-8 py-3 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-black text-xs shadow-md transition flex items-center gap-2"
+            >
+              <span>{t("Review Request Details", "مراجعة تفاصيل الطلب")}</span>
+              <span>{isArabic ? "←" : "→"}</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── STEP 2: REVIEW & SUBMIT ── */}
+      {currentStep === 2 && (
+        <div className="p-6 max-w-4xl mx-auto">
+          <RfqReviewScreen
+            common={common}
+            specific={specific}
+            mode={activeMode}
+            paymentTerms={paymentTerms}
+            attachments={attachments}
+            msdsList={msdsList}
+            countries={DEFAULT_COUNTRIES}
+            locations={DEFAULT_LOCATIONS}
+            onEditSection={handleEditSection}
+            onSubmit={handleFinalSubmit}
+            isSubmitting={isSubmitting}
+            errorMessage={submitError}
           />
         </div>
+      )}
 
-        {/* ═══════════════════════════════════════════════════
-            VALIDATION ERRORS
-        ═══════════════════════════════════════════════════ */}
-        {validationErrors.length > 0 && (
-          <div
-            role="alert"
-            className="rounded-xl bg-red-50 border border-red-200 p-4 space-y-1"
-          >
-            <p className="text-sm font-bold text-red-700 mb-2">
-              {t("Please fix the following before submitting:", "يرجى تصحيح الأخطاء التالية قبل الإرسال:")}
+      {/* ── STEP 3: SUBMITTED SUCCESS CELEBRATION ── */}
+      {currentStep === 3 && (
+        <div className="p-10 max-w-xl mx-auto text-center space-y-6 animate-in zoom-in-95 duration-200">
+          <div className="w-16 h-16 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto shadow-inner">
+            <IconCheck className="w-8 h-8 stroke-[3]" />
+          </div>
+
+          <div>
+            <h2 className="text-xl font-black text-slate-900 mb-1">
+              {t("Quotation Request Submitted Successfully!", "تم إرسال طلب عرض السعر بنجاح!")}
+            </h2>
+            <p className="text-xs text-slate-500 leading-relaxed max-w-md mx-auto">
+              {t(
+                "Your request has been registered and forwarded to EI Freight Operations for market matching and provider quotation dispatch.",
+                "تم تسجيل طلبك وإحالته إلى إدارة العمليات للمطابقة مع شركات الشحن المعتمدة وإصدار عروض الأسعار."
+              )}
             </p>
-            <ul className="list-disc list-inside space-y-0.5">
-              {validationErrors.map((err, i) => (
-                <li key={i} className="text-sm text-red-600">{err}</li>
-              ))}
-            </ul>
           </div>
-        )}
 
-        {/* ── Submit error (from Firebase) ── */}
-        {submitError && (
-          <div role="alert" className="rounded-xl bg-red-50 border border-red-200 p-4">
-            <p className="text-sm font-bold text-red-700">{t("Submission failed", "فشل إرسال الطلب")}</p>
-            <p className="text-sm text-red-600 mt-1">{submitError}</p>
+          <div className="p-4 rounded-xl bg-slate-100 border border-slate-200 font-mono text-sm font-bold text-slate-800">
+            {createdRfqId}
           </div>
-        )}
 
-        {/* ═══════════════════════════════════════════════════
-            SUBMIT BUTTON
-        ═══════════════════════════════════════════════════ */}
-        <div className="flex items-center justify-between gap-4 pt-2">
-          <p className="text-xs text-slate-400">
-            {t("Logged in as", "مسجل باسم:")} <strong className="text-slate-600 font-mono">{user.email}</strong>
-          </p>
-          <button
-            type="submit"
-            disabled={isSubmitting}
-            className={clsx(
-              "flex items-center gap-2 px-6 py-3 rounded-xl font-semibold text-sm",
-              "bg-blue-600 text-white shadow-sm transition-all",
-              "hover:bg-blue-700 active:scale-[0.98]",
-              "disabled:opacity-60 disabled:cursor-not-allowed"
-            )}
-          >
-            {isSubmitting ? (
-              <>
-                <svg className="animate-spin h-4 w-4 text-white" viewBox="0 0 24 24" fill="none">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
-                </svg>
-                {t("Submitting…", "جارٍ إرسال الطلب…")}
-              </>
-            ) : (
-              <>{t("🚀 Submit Request", "🚀 إرسال طلب الشحن")}</>
-            )}
-          </button>
+          <div className="flex flex-col sm:flex-row items-center justify-center gap-3 pt-4">
+            <button
+              type="button"
+              onClick={() => {
+                if (onClose) onClose();
+                navigate("/dashboard?tab=requests");
+              }}
+              className="w-full sm:w-auto px-6 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs shadow-sm transition"
+            >
+              {t("View in My Requests", "عرض في قائمة طلباتي")}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setCommon(INITIAL_COMMON);
+                setSpecific(INITIAL_SPECIFIC);
+                setPaymentTerms(INITIAL_PAYMENT);
+                setAttachments([]);
+                setMsdsList([]);
+                setCopiedFrom(null);
+                setCurrentStep(1);
+              }}
+              className="w-full sm:w-auto px-6 py-2.5 rounded-xl border border-slate-300 hover:bg-slate-100 font-bold text-xs text-slate-700 transition"
+            >
+              {t("Create Another Request", "إنشاء طلب جديد آخر")}
+            </button>
+          </div>
         </div>
-      </form>
+      )}
+
+      {/* ── Previous Shipment Selection Modal ── */}
+      <RfqPreviousShipmentModal
+        isOpen={showPreviousModal}
+        onClose={() => setShowPreviousModal(false)}
+        rfqs={allRfqs}
+        onSelectShipment={handleApplyClonedShipment}
+      />
+
+      {/* ── Dirty-Close Dialog ── */}
+      <RfqDirtyCloseDialog
+        isOpen={showDirtyDialog}
+        onConfirmClose={handleConfirmDiscard}
+        onCancel={() => setShowDirtyDialog(false)}
+      />
     </div>
   );
 }
-
-export default CreateShipmentForm;
